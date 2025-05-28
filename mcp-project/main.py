@@ -1,153 +1,123 @@
 # server.py
 from mcp.server.fastmcp import FastMCP
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import random
 from dataclasses import dataclass
 from datetime import datetime
+import httpx
 
 # Create an MCP server
 mcp = FastMCP("Student Management System")
 
-# Data structure for student information
-@dataclass
-class Student:
-    roll_no: int
-    name: str
-    age: int
-    grade: str
-    subjects: List[str]
-    created_at: datetime
+# Global variable to store the authentication token
+auth_token: Optional[str] = None
 
-# In-memory database to store students
-students_db = {}
-
-# Generate random student data
-def generate_random_students(count: int = 10):
-    first_names = ["John", "Emma", "Michael", "Sophia", "William", "Olivia", "James", "Ava", "Benjamin", "Isabella"]
-    last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
-    subjects = ["Math", "Science", "English", "History", "Computer Science", "Physics", "Chemistry", "Biology"]
-    grades = ["A", "B", "C", "D"]
-
-    for i in range(count):
-        roll_no = i + 1
-        name = f"{random.choice(first_names)} {random.choice(last_names)}"
-        age = random.randint(15, 20)
-        grade = random.choice(grades)
-        student_subjects = random.sample(subjects, k=random.randint(3, 6))
-        created_at = datetime.now()
-        
-        students_db[roll_no] = Student(
-            roll_no=roll_no,
-            name=name,
-            age=age,
-            grade=grade,
-            subjects=student_subjects,
-            created_at=created_at
-        )
-
-# Initialize with some random data
-generate_random_students()
-
-# Get student by roll number
-@mcp.resource("student://{roll_no}")
-def get_student_by_roll(roll_no: int) -> dict:
-    """Get student information by roll number"""
-    if roll_no not in students_db:
-        return {"error": "Student not found"}
-    student = students_db[roll_no]
-    return {
-        "roll_no": student.roll_no,
-        "name": student.name,
-        "age": student.age,
-        "grade": student.grade,
-        "subjects": student.subjects,
-        "created_at": student.created_at.isoformat()
-    }
-
-# Get student by name
-@mcp.resource("student/name://{name}")
-def get_student_by_name(name: str) -> List[dict]:
-    """Get student information by name"""
-    matching_students = []
-    for student in students_db.values():
-        if name.lower() in student.name.lower():
-            matching_students.append({
-                "roll_no": student.roll_no,
-                "name": student.name,
-                "age": student.age,
-                "grade": student.grade,
-                "subjects": student.subjects,
-                "created_at": student.created_at.isoformat()
-            })
-    return matching_students
-
-# Add new student
 @mcp.tool()
-def add_student(name: str, age: int, grade: str, subjects: List[str]) -> dict:
-    """Add a new student to the database"""
-    roll_no = max(students_db.keys()) + 1 if students_db else 1
-    student = Student(
-        roll_no=roll_no,
-        name=name,
-        age=age,
-        grade=grade,
-        subjects=subjects,
-        created_at=datetime.now()
-    )
-    students_db[roll_no] = student
-    return {
-        "message": "Student added successfully",
-        "roll_no": roll_no
-    }
-
-# Update student information
-@mcp.tool()
-def update_student(roll_no: int, name: Optional[str] = None, age: Optional[int] = None, 
-                  grade: Optional[str] = None, subjects: Optional[List[str]] = None) -> dict:
-    """Update student information"""
-    if roll_no not in students_db:
-        return {"error": "Student not found"}
+def login(username: str, password: str) -> Dict[str, Any]:
+    """Login to get authentication token"""
+    global auth_token
     
-    student = students_db[roll_no]
-    if name:
-        student.name = name
-    if age:
-        student.age = age
-    if grade:
-        student.grade = grade
-    if subjects:
-        student.subjects = subjects
-    
-    return {
-        "message": "Student updated successfully",
-        "roll_no": roll_no
-    }
-
-# Delete student
-@mcp.tool()
-def delete_student(roll_no: int) -> dict:
-    """Delete a student from the database"""
-    if roll_no not in students_db:
-        return {"error": "Student not found"}
-    
-    del students_db[roll_no]
-    return {
-        "message": "Student deleted successfully",
-        "roll_no": roll_no
-    }
-
-# List all students
-@mcp.tool()
-def list_all_students() -> List[dict]:
-    """Get information about all students"""
-    return [
-        {
-            "roll_no": student.roll_no,
-            "name": student.name,
-            "age": student.age,
-            "grade": student.grade,
-            "subjects": student.subjects,
-            "created_at": student.created_at.isoformat()
+    try:
+        # Prepare the form data for login
+        login_data = {
+            'grant_type': '',
+            'username': username,
+            'password': password,
+            'scope': '',
+            'client_id': '',
+            'client_secret': ''
         }
-        for student in students_db.values()
-    ]
+        
+        response = httpx.post(
+            'http://127.0.0.1:8000/auth/login',
+            data=login_data,
+            headers={
+                'accept': 'application/json',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            timeout=10.0
+        )
+        
+        response.raise_for_status()
+        login_response = response.json()
+        
+        # Store the token globally for future API calls
+        if 'access_token' in login_response:
+            auth_token = login_response['access_token']
+            return {
+                "success": True,
+                "message": "Login successful",
+                "token_type": login_response.get('token_type', 'bearer'),
+                "token_preview": f"{auth_token[:20]}..." if auth_token else None
+            }
+        else:
+            return {"success": False, "error": "No access token in response"}
+            
+    except httpx.RequestError as e:
+        return {"success": False, "error": f"Connection failed: {str(e)}"}
+    except httpx.HTTPStatusError as e:
+        return {"success": False, "error": f"HTTP {e.response.status_code}: {e.response.text}"}
+
+@mcp.tool()
+def get_products(skip: int = 0, limit: int = 100) -> Dict[str, Any]:
+    """Get products from the API with pagination (requires authentication)"""
+    global auth_token
+    
+    # Check if we have an authentication token
+    if not auth_token:
+        return {
+            "error": "Not authenticated. Please login first using the login tool.",
+            "suggestion": "Call login(username='neel', password='neel') first"
+        }
+    
+    try:
+        response = httpx.get(
+            'http://127.0.0.1:8000/api/v1/products/',
+            params={
+                'skip': skip,
+                'limit': limit
+            },
+            headers={
+                'accept': 'application/json',
+                # 'Authorization': f'Bearer {auth_token}'
+            },
+            timeout=10.0
+        )
+        
+        response.raise_for_status()
+        return {
+            "success": True,
+            "data": response.json()
+        }
+        
+    except httpx.RequestError as e:
+        return {"success": False, "error": f"Connection failed: {str(e)}"}
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            # Token might be expired, clear it
+            auth_token = None
+            return {
+                "success": False, 
+                "error": "Authentication failed. Token may be expired. Please login again.",
+                "suggestion": "Call login(username='neel', password='neel') again"
+            }
+        return {"success": False, "error": f"HTTP {e.response.status_code}: {e.response.text}"}
+
+@mcp.tool()
+def logout() -> Dict[str, str]:
+    """Logout and clear the authentication token"""
+    global auth_token
+    auth_token = None
+    return {"success": True, "message": "Logged out successfully"}
+
+@mcp.tool()
+def get_auth_status() -> Dict[str, Any]:
+    """Check current authentication status"""
+    global auth_token
+    return {
+        "authenticated": auth_token is not None,
+        "token_preview": f"{auth_token[:20]}..." if auth_token else None
+    }
+
+if __name__ == "__main__":
+    mcp.run()
